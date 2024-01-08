@@ -19,6 +19,6 @@ from django.urls import path, include
 from . import views
 
 urlpatterns = [
-    path('', views.index),
     path('create/<str:code>/', views.get_resource_owner_42_id),
+    path('verify/', views.get_JWT_token),
 ]

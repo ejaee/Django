@@ -3,12 +3,19 @@ from .models import UserProfile
 import requests
 import secrets
 from django.core.mail import send_mail
+import jwt
+from datetime import datetime, timedelta
+from django.http import JsonResponse
+from django.conf import settings
+import json
+from django.views.decorators.csrf import csrf_exempt
 
 # Create your views here.
-def index(request):
-    return HttpResponse('index!')
+# def index(request):
+#     return HttpResponse('index!')
 
 def get_resource_owner_42_id(request, code):
+
     try:
         # 토큰 받기 위한 요청
         token_response = requests.post(
@@ -24,22 +31,84 @@ def get_resource_owner_42_id(request, code):
         )
 
         if token_response.status_code == 200:
+
             access_token = token_response.json().get('access_token')
+
+            print(access_token)
 
             created, user_profile = save_user_data(access_token)
 
             otp = generate_otp()
+            user_profile.otp_number = otp
+            user_profile.save()
+
             send_email_with_otp(otp, user_profile)
 
             if created:
-                return HttpResponse('Created new user profile')
+                response_data = {'message': 'Created new user profile', 'access_token': access_token}
             else:
-                return HttpResponse('User profile already exists')
+                response_data = {'message': 'User profile already exists', 'access_token': access_token}
 
+            return JsonResponse(response_data)
         else:
-            return '-1'
+            return JsonResponse({'message': 'token_response is not 200'})
     except Exception as e:
         return HttpResponse('Error: ' + str(e))
+
+@csrf_exempt
+def get_JWT_token(request):
+    try:
+        # 요청 본문에서 JSON 데이터 추출
+        data = json.loads(request.body.decode('utf-8')) if request.body else {}
+
+        # JSON 데이터에서 access_token 및 input_number 추출
+        access_token = data.get('access_token')
+        input_number = data.get('input_number')
+
+        # access_token을 사용하여 사용자를 찾음
+        user_profile = get_user_profile_by_access_token(access_token)
+
+        if user_profile:
+            # 사용자의 otp_number와 입력받은 otp를 비교
+            if user_profile.otp_number == input_number:
+                # OTP 일치 시 JWT 토큰 생성
+                jwt_payload = {
+                    'user_id': user_profile.external_id,
+                    'exp': datetime.utcnow() + timedelta(hours=1)  # 토큰 만료 시간 설정 (예: 1시간)
+                }
+                jwt_secret_key = settings.SECRET_KEY  # settings.py의 SECRET_KEY 사용
+                jwt_token = jwt.encode(jwt_payload, jwt_secret_key, algorithm='HS256')
+                # JSON 응답 생성
+                response_data = {
+                    'status': 'OK',
+                    'jwt_token': jwt_token
+                }
+                return JsonResponse(response_data)
+            else:
+                return JsonResponse({'status': 'NO'})
+        else:
+            return JsonResponse({'status': 'User not found'})
+
+    except Exception as e:
+        return JsonResponse({'status': 'Error', 'message': str(e)})
+
+
+def get_user_profile_by_access_token(access_token):
+    try:
+        # access_token을 사용하여 사용자를 찾음
+        owner_response = requests.get(
+            'https://api.intra.42.fr/oauth/token/info',
+            headers={'Authorization': f'Bearer {access_token}'}
+        )
+        owner_id = owner_response.json().get('resource_owner_id')
+
+        if UserProfile.objects.filter(external_id=owner_id).exists():
+            return UserProfile.objects.get(external_id=owner_id)
+        else:
+            return None
+
+    except Exception as e:
+        raise e
 
 def send_email_with_otp(otp, user_profile):
     # otp 토큰 발급
