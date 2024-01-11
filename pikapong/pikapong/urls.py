@@ -9,4 +9,5 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('users.urls')),
     path('accounts/', include(tf_urls)),
+    path('users/', include('users.urls')),
 ]
